@@ -268,7 +268,7 @@
 
       const targetOpts = user.id === 'pastor'
         ? [{ value: '전체', label: '전체 공유' }, ...GROUPS.map(g => ({ value: g, label: `${g}그룹` }))]
-        : [{ value: user.group, label: `${user.group}그룹 → 담임목사` }];
+        : [{ value: '전체', label: '전체 공유' }, { value: user.group, label: `${user.group}그룹 → 담임목사` }];
 
       async function fetch() {
         setLoading(true);
@@ -279,7 +279,7 @@
 
       const visible = notices.filter(n => user.id === 'pastor' || n.target === '전체' || n.target === user.group);
 
-      function openNew() { setEditItem(null); setForm({ target: user.id === 'pastor' ? '전체' : user.group, title: '', content: '' }); setFormFiles([]); setShowForm(true); }
+      function openNew() { setEditItem(null); setForm({ target: '전체', title: '', content: '' }); setFormFiles([]); setShowForm(true); }
       function openEdit(n) { setEditItem(n); setForm({ target: n.target, title: n.title, content: n.content }); setFormFiles(n.files || []); setShowForm(true); setSelected(null); }
 
       async function submit() {
