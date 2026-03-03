@@ -118,11 +118,12 @@
       return '📎';
     }
     async function uploadFile(file, folder) {
-      const path = `${folder}/${genId()}_${file.name}`;
-      const { error } = await sb.storage.from('attachments').upload(path, file);
+      const ext = file.name.split('.').pop().toLowerCase();
+      const safePath = `${folder}/${genId()}.${ext}`; // 한글 제거, 영숫자+확장자만 사용
+      const { error } = await sb.storage.from('attachments').upload(safePath, file);
       if (error) throw error;
-      const { data } = sb.storage.from('attachments').getPublicUrl(path);
-      return { name: file.name, url: data.publicUrl, size: file.size };
+      const { data } = sb.storage.from('attachments').getPublicUrl(safePath);
+      return { name: file.name, url: data.publicUrl, size: file.size }; // 표시명은 원본 유지
     }
 
     // ── 액션 버튼 (수정/삭제) ─────────────────────────────────────
