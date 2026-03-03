@@ -79,7 +79,7 @@
     async function sendPushNotification(title, body) {
       if (ONESIGNAL_APP_ID === 'YOUR_ONESIGNAL_APP_ID') return; // 미설정 시 스킵
       try {
-        await fetch('https://onesignal.com/api/v1/notifications', {
+        const res = await fetch('https://onesignal.com/api/v1/notifications', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -87,13 +87,17 @@
           },
           body: JSON.stringify({
             app_id: ONESIGNAL_APP_ID,
-            included_segments: ['Total Subscribed'],
+            included_segments: ['Subscribed Users'],  // ✅ 올바른 세그먼트명
             headings: { ko: title, en: title },
             contents: { ko: body, en: body },
             url: window.location.href
           })
         });
-      } catch (e) { /* 알림 실패해도 앱 동작에 영향 없음 */ }
+        const json = await res.json();
+        console.log('[알림 발송 결과]', json); // 디버깅용
+      } catch (e) {
+        console.warn('[알림 발송 실패]', e); // 에러 기록
+      }
     }
 
     const USERS = [
