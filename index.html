@@ -20,16 +20,14 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: 'Noto Sans KR', sans-serif;
-      background: #f3f4f6;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Noto Sans KR', sans-serif; background: #f3f4f6; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .new-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+               background:#3b82f6; animation:pulse 2s infinite; flex-shrink:0; }
+    .badge { display:inline-flex; align-items:center; justify-content:center;
+             min-width:18px; height:18px; padding:0 5px; border-radius:9px;
+             background:#ef4444; color:#fff; font-size:11px; font-weight:700; }
   </style>
 </head>
 
@@ -37,16 +35,21 @@
   <div id="root"></div>
   <script type="text/babel">
 
+    /* ══════════════════════════════════════════════════════════════
+       Supabase 설정
+    ══════════════════════════════════════════════════════════════ */
     const SUPABASE_URL = 'https://samszeytemrdwlnrypyp.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhbXN6ZXl0ZW1yZHdsbnJ5cHlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyNzI4ODMsImV4cCI6MjA4Nzg0ODg4M30.aQCFnAy662-ac4EO9sfg9VVpICkMaRmpMqntjhMEBFY';
     const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    // ── OneSignal 설정 ────────────────────────────────────────────
-    // ★ 아래 두 값을 OneSignal 대시보드에서 발급받은 실제 값으로 교체하세요 ★
+    /* ══════════════════════════════════════════════════════════════
+       OneSignal 설정
+       ⚠️ 보안 주의: REST API 키가 클라이언트에 노출되면 누구든 알림을 발송할 수 있습니다.
+          향후 Supabase Edge Function으로 이전하여 키를 서버에 보관하세요.
+    ══════════════════════════════════════════════════════════════ */
     const ONESIGNAL_APP_ID = 'f69f890a-3571-4859-9b07-bde6ecc88fd6';
     const ONESIGNAL_REST_API_KEY = 'os_v2_app_62pyscrvofeftgyhxxtozsep22uror6ydfhejc5hvauihv5a2t3j43wbkzjflgprwj73cmxgudgs7gmkxbfny632jxkl3ctekr6z27i';
 
-    // OneSignal 초기화
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function (OneSignal) {
       await OneSignal.init({
@@ -55,13 +58,8 @@
         promptOptions: {
           slidedown: {
             prompts: [{
-              type: 'push',
-              autoPrompt: true,
-              text: {
-                actionMessage: '새 공지·업무 알림을 받으시겠습니까?',
-                acceptButton: '허용',
-                cancelButton: '나중에'
-              },
+              type: 'push', autoPrompt: true,
+              text: { actionMessage: '새 공지·업무 알림을 받으시겠습니까?', acceptButton: '허용', cancelButton: '나중에' },
               delay: { pageViews: 1, timeDelay: 3 }
             }]
           }
@@ -69,587 +67,910 @@
       });
     });
 
-    // 서비스 워커 등록 (OneSignal SDK가 자동으로 OneSignalSDKWorker.js를 등록하므로
-    // 아래는 일반 캐시용 service-worker.js 추가 등록입니다)
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./service-worker.js').catch(() => { });
-      });
+      window.addEventListener('load', () => { navigator.serviceWorker.register('./service-worker.js').catch(() => {}); });
     }
 
-    // 전체 사용자에게 푸시 알림 발송 함수
     async function sendPushNotification(title, body) {
-      if (ONESIGNAL_APP_ID === 'YOUR_ONESIGNAL_APP_ID') return; // 미설정 시 스킵
       try {
-        const res = await fetch('https://onesignal.com/api/v1/notifications', {
+        await fetch('https://onesignal.com/api/v1/notifications', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`
-          },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}` },
           body: JSON.stringify({
             app_id: ONESIGNAL_APP_ID,
-            included_segments: ['Subscribed Users'],  // ✅ 올바른 세그먼트명
+            included_segments: ['Subscribed Users'],
             headings: { ko: title, en: title },
             contents: { ko: body, en: body },
             url: window.location.href
           })
         });
-        const json = await res.json();
-        console.log('[알림 발송 결과]', json); // 디버깅용
-      } catch (e) {
-        console.warn('[알림 발송 실패]', e); // 에러 기록
-      }
+      } catch (e) { console.warn('[알림 발송 실패]', e); }
     }
 
+    /* ══════════════════════════════════════════════════════════════
+       사용자 설정
+       ⚠️ 기본 PIN은 최초 로그인 후 반드시 변경하세요
+          (현재는 localStorage 저장 방식; 향후 서버 인증 도입 권장)
+    ══════════════════════════════════════════════════════════════ */
     const USERS = [
-      { id: 'pastor', name: '양용전', role: '담임목사', group: null, color: '#8B6914' },
-      { id: 'elder1', name: '조시형', role: '장로', group: '예배양육', color: '#1a5c8a' },
-      { id: 'elder2', name: '전성준', role: '장로', group: '재정행정', color: '#1a6b4a' },
-      { id: 'elder3', name: '이원경', role: '장로', group: '봉사선교', color: '#6b1a4a' },
+      { id: 'pastor', name: '양용전', role: '담임목사', group: null,    color: '#8B6914', pin: '0000' },
+      { id: 'elder1', name: '조시형', role: '장로',    group: '예배양육', color: '#1a5c8a', pin: '1111' },
+      { id: 'elder2', name: '전성준', role: '장로',    group: '재정행정', color: '#1a6b4a', pin: '2222' },
+      { id: 'elder3', name: '이원경', role: '장로',    group: '봉사선교', color: '#6b1a4a', pin: '3333' },
     ];
     const GROUPS = ['예배양육', '재정행정', '봉사선교'];
-    const STATUS_COLORS = { '검토중': '#d97706', '승인': '#16a34a', '보류': '#dc2626', '완료': '#6b7280', '대기중': '#d97706', '답변완료': '#16a34a' };
-    const PRIORITY_COLORS = { '높음': '#dc2626', '중간': '#d97706', '낮음': '#6b7280' };
+    const STATUS_COLORS = { '검토중':'#d97706','승인':'#16a34a','보류':'#dc2626','완료':'#6b7280','대기중':'#d97706','답변완료':'#16a34a' };
+    const PRIORITY_COLORS = { '높음':'#dc2626','중간':'#d97706','낮음':'#6b7280' };
 
-    function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-    function fmtDate(s) { if (!s) return ''; const d = new Date(s); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
+    /* ── 유틸 함수 ──────────────────────────────────────────────── */
+    function genId() {
+      // crypto.randomUUID() — 중복 없는 UUID 사용 (구형: 폴백)
+      return (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    }
+
+    function fmtDate(s) {
+      if (!s) return '';
+      const d = new Date(s);
+      const now = new Date();
+      const year = d.getFullYear();
+      const yearStr = year !== now.getFullYear() ? `${year}.` : '';
+      return `${yearStr}${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+
     function fileIcon(name) {
       const ext = (name || '').split('.').pop().toLowerCase();
-      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return '🖼️';
+      if (['jpg','jpeg','png','gif','webp'].includes(ext)) return '🖼️';
       if (ext === 'pdf') return '📄';
-      if (['doc', 'docx'].includes(ext)) return '📝';
-      if (['xls', 'xlsx'].includes(ext)) return '📊';
-      if (['ppt', 'pptx'].includes(ext)) return '📑';
+      if (['doc','docx'].includes(ext)) return '📝';
+      if (['xls','xlsx'].includes(ext)) return '📊';
+      if (['ppt','pptx'].includes(ext)) return '📑';
       return '📎';
     }
+
+    function isDeadlineNear(d) {
+      if (!d) return false;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const dl = new Date(d);
+      const diff = (dl - today) / 86400000;
+      return diff >= 0 && diff <= 3;
+    }
+    function isDeadlinePast(d) {
+      if (!d) return false;
+      const today = new Date(); today.setHours(0,0,0,0);
+      return new Date(d) < today;
+    }
+
     async function uploadFile(file, folder) {
+      const MAX = 50 * 1024 * 1024;
+      if (file.size > MAX) throw new Error(`${file.name} 파일이 50MB를 초과합니다.`);
       const ext = file.name.split('.').pop().toLowerCase();
-      const safePath = `${folder}/${genId()}.${ext}`; // 한글 제거, 영숫자+확장자만 사용
+      const safePath = `${folder}/${genId()}.${ext}`;
       const { error } = await sb.storage.from('attachments').upload(safePath, file);
       if (error) throw error;
       const { data } = sb.storage.from('attachments').getPublicUrl(safePath);
-      return { name: file.name, url: data.publicUrl, size: file.size }; // 표시명은 원본 유지
+      return { name: file.name, url: data.publicUrl, size: file.size };
     }
 
-    // ── 액션 버튼 (수정/삭제) ─────────────────────────────────────
-    function ActionBtns({ canEdit, canDelete, onEdit, onDelete, e }) {
+    function lsGet(key, def = null) { try { return JSON.parse(localStorage.getItem(key)) ?? def; } catch { return def; } }
+    function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+
+    /* ══════════════════════════════════════════════════════════════
+       공통 UI 컴포넌트
+    ══════════════════════════════════════════════════════════════ */
+    function ActionBtns({ canEdit, canDelete, onEdit, onDelete }) {
       if (!canEdit && !canDelete) return null;
-      return <div style={{ display: 'flex', gap: 6, marginTop: 10, borderTop: '1px solid #f3f4f6', paddingTop: 10 }}>
+      return <div style={{ display:'flex', gap:6, marginTop:10, borderTop:'1px solid #f3f4f6', paddingTop:10 }}>
         {canEdit && <button onClick={ev => { ev.stopPropagation(); onEdit(); }}>
-          <span style={{ display: 'inline-block', padding: '5px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: '#374151' }}>✏️ 수정</span>
+          <span style={{ display:'inline-block', padding:'5px 14px', borderRadius:6, border:'1px solid #d1d5db', background:'#f9fafb', fontSize:12, fontWeight:700, cursor:'pointer', color:'#374151' }}>✏️ 수정</span>
         </button>}
         {canDelete && <button onClick={ev => { ev.stopPropagation(); onDelete(); }}>
-          <span style={{ display: 'inline-block', padding: '5px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff5f5', fontSize: 12, fontWeight: 700, cursor: 'pointer', color: '#dc2626' }}>🗑️ 삭제</span>
+          <span style={{ display:'inline-block', padding:'5px 14px', borderRadius:6, border:'1px solid #fca5a5', background:'#fff5f5', fontSize:12, fontWeight:700, cursor:'pointer', color:'#dc2626' }}>🗑️ 삭제</span>
         </button>}
       </div>;
     }
 
-    // ── 공용 UI ───────────────────────────────────────────────────
     function Modal({ title, onClose, children }) {
-      return <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 540, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 22px 14px', borderBottom: '1px solid #e5e7eb' }}>
-            <span style={{ fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>{title}</span>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#9ca3af', lineHeight: 1 }}>×</button>
+      React.useEffect(() => {
+        const fn = e => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', fn);
+        return () => window.removeEventListener('keydown', fn);
+      }, []);
+      return <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:50, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+        <div style={{ background:'#fff', borderRadius:12, width:'100%', maxWidth:540, maxHeight:'88vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'18px 22px 14px', borderBottom:'1px solid #e5e7eb' }}>
+            <span style={{ fontSize:16, fontWeight:700, color:'#1a1a2e' }}>{title}</span>
+            <button onClick={onClose} style={{ background:'none', border:'none', fontSize:22, cursor:'pointer', color:'#9ca3af', lineHeight:1 }}>×</button>
           </div>
-          <div style={{ padding: '18px 22px' }}>{children}</div>
+          <div style={{ padding:'18px 22px' }}>{children}</div>
         </div>
       </div>;
     }
+
     function ConfirmDelete({ onConfirm, onCancel }) {
-      return <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-        <div style={{ background: '#fff', borderRadius: 12, padding: 28, maxWidth: 300, width: '100%', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>🗑️</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1a2e', marginBottom: 8 }}>삭제하시겠습니까?</div>
-          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>삭제된 내용은 복구할 수 없습니다.</div>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+      return <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:60, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+        <div style={{ background:'#fff', borderRadius:12, padding:28, maxWidth:300, width:'100%', textAlign:'center', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div style={{ fontSize:36, marginBottom:12 }}>🗑️</div>
+          <div style={{ fontSize:16, fontWeight:700, color:'#1a1a2e', marginBottom:8 }}>삭제하시겠습니까?</div>
+          <div style={{ fontSize:13, color:'#6b7280', marginBottom:20 }}>삭제된 내용은 복구할 수 없습니다.</div>
+          <div style={{ display:'flex', gap:10, justifyContent:'center' }}>
             <Btn outline color='#6b7280' onClick={onCancel}>취소</Btn>
             <Btn color='#dc2626' onClick={onConfirm}>삭제</Btn>
           </div>
         </div>
       </div>;
     }
+
     function Badge({ text, color }) {
-      return <span style={{ display: 'inline-block', padding: '2px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: color + '22', color }}>{text}</span>;
+      return <span style={{ display:'inline-block', padding:'2px 9px', borderRadius:20, fontSize:11, fontWeight:700, background:color+'22', color }}>{text}</span>;
     }
-    function Card({ children, onClick, style = {} }) {
+
+    function Card({ children, style={} }) {
       const [h, setH] = React.useState(false);
       return <div onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-        style={{
-          background: '#fff', borderRadius: 10, padding: 16, border: '1px solid #e5e7eb',
-          boxShadow: h ? '0 4px 14px rgba(0,0,0,0.12)' : '0 1px 3px rgba(0,0,0,0.06)', transition: 'box-shadow 0.15s', ...style
-        }}>
+        style={{ background:'#fff', borderRadius:10, padding:16, border:'1px solid #e5e7eb',
+          boxShadow: h ? '0 4px 14px rgba(0,0,0,0.12)' : '0 1px 3px rgba(0,0,0,0.06)',
+          transition:'box-shadow 0.15s', ...style }}>
         {children}
       </div>;
     }
-    function Inp({ label, value, onChange, type = 'text', placeholder = '' }) {
-      return <div style={{ marginBottom: 13 }}>
-        {label && <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>{label}</label>}
+
+    function Inp({ label, value, onChange, type='text', placeholder='' }) {
+      return <div style={{ marginBottom:13 }}>
+        {label && <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:5 }}>{label}</label>}
         <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-          style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 14, outline: 'none' }} />
+          style={{ width:'100%', padding:'8px 12px', border:'1px solid #d1d5db', borderRadius:7, fontSize:14, outline:'none' }} />
       </div>;
     }
-    function Txt({ label, value, onChange, rows = 4, placeholder = '' }) {
-      return <div style={{ marginBottom: 13 }}>
-        {label && <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>{label}</label>}
+
+    function Txt({ label, value, onChange, rows=4, placeholder='', onKeyDown }) {
+      return <div style={{ marginBottom:13 }}>
+        {label && <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:5 }}>{label}</label>}
         <textarea value={value} onChange={e => onChange(e.target.value)} rows={rows} placeholder={placeholder}
-          style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 14, outline: 'none', resize: 'vertical' }} />
+          onKeyDown={onKeyDown}
+          style={{ width:'100%', padding:'8px 12px', border:'1px solid #d1d5db', borderRadius:7, fontSize:14, outline:'none', resize:'vertical' }} />
       </div>;
     }
+
     function Sel({ label, value, onChange, options }) {
-      return <div style={{ marginBottom: 13 }}>
-        {label && <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>{label}</label>}
+      return <div style={{ marginBottom:13 }}>
+        {label && <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:5 }}>{label}</label>}
         <select value={value} onChange={e => onChange(e.target.value)}
-          style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 14, outline: 'none', background: '#fff' }}>
-          {options.map(o => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
+          style={{ width:'100%', padding:'8px 12px', border:'1px solid #d1d5db', borderRadius:7, fontSize:14, outline:'none', background:'#fff' }}>
+          {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
         </select>
       </div>;
     }
-    function Btn({ children, onClick, color = '#1a1a2e', small = false, outline = false, disabled = false }) {
+
+    function Btn({ children, onClick, color='#1a1a2e', small=false, outline=false, disabled=false }) {
       const [h, setH] = React.useState(false);
       return <button onClick={onClick} disabled={disabled} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-        style={{
-          padding: small ? '5px 11px' : '8px 17px', background: outline ? (h ? color + '15' : '#fff') : (h ? color + 'cc' : color),
-          color: outline ? color : '#fff', border: `1.5px solid ${color}`, borderRadius: 7, fontSize: small ? 12 : 13, fontWeight: 700,
-          cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1, transition: 'all 0.15s'
-        }}>
+        style={{ padding:small?'5px 11px':'8px 17px', background:outline?(h?color+'15':'#fff'):(h?color+'cc':color),
+          color:outline?color:'#fff', border:`1.5px solid ${color}`, borderRadius:7, fontSize:small?12:13,
+          fontWeight:700, cursor:disabled?'default':'pointer', opacity:disabled?0.5:1, transition:'all 0.15s' }}>
         {children}
       </button>;
     }
-    function Spinner() { return <div style={{ textAlign: 'center', padding: 40, color: '#9ca3af', fontSize: 14 }}>불러오는 중...</div>; }
+
+    function Spinner() { return <div style={{ textAlign:'center', padding:40, color:'#9ca3af', fontSize:14 }}>불러오는 중...</div>; }
+
+    function ErrBox({ msg }) {
+      if (!msg) return null;
+      return <div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 14px',
+        fontSize:13, color:'#dc2626', marginBottom:12 }}>⚠️ {msg}</div>;
+    }
+
+    function SearchBar({ value, onChange, placeholder='제목·내용·이름 검색...' }) {
+      return <div style={{ position:'relative', marginBottom:12 }}>
+        <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:'#9ca3af', fontSize:14 }}>🔍</span>
+        <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+          style={{ width:'100%', padding:'7px 32px 7px 30px', border:'1px solid #d1d5db', borderRadius:20,
+            fontSize:13, outline:'none', background:'#f9fafb' }} />
+        {value && <button onClick={() => onChange('')}
+          style={{ position:'absolute', right:10, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'#9ca3af', fontSize:16, lineHeight:1 }}>×</button>}
+      </div>;
+    }
+
     function FileUploader({ files, onChange, uploading, setUploading, folder }) {
       const ref = React.useRef();
       async function handleChange(e) {
         const sel = Array.from(e.target.files); if (!sel.length) return;
         setUploading(true);
-        try { const up = await Promise.all(sel.map(f => uploadFile(f, folder))); onChange([...files, ...up]); }
-        catch (err) { alert('업로드 실패: ' + err.message); }
+        try {
+          const up = await Promise.all(sel.map(f => uploadFile(f, folder)));
+          onChange([...files, ...up]);
+        } catch (err) { alert('업로드 실패: ' + err.message); }
         setUploading(false); e.target.value = '';
       }
-      return <div style={{ marginBottom: 13 }}>
-        <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 5 }}>파일 첨부</label>
-        <div style={{ border: '1.5px dashed #d1d5db', borderRadius: 8, padding: '10px 12px', background: '#fafafa' }}>
-          {files.map((f, i) => <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, fontSize: 13, color: '#374151' }}>
+      return <div style={{ marginBottom:13 }}>
+        <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#374151', marginBottom:5 }}>파일 첨부</label>
+        <div style={{ border:'1.5px dashed #d1d5db', borderRadius:8, padding:'10px 12px', background:'#fafafa' }}>
+          {files.map((f, i) => <div key={i} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5, fontSize:13, color:'#374151' }}>
             <span>{fileIcon(f.name)}</span>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-            <span style={{ fontSize: 11, color: '#9ca3af' }}>{(f.size / 1024).toFixed(0)}KB</span>
-            <button onClick={() => onChange(files.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontSize: 14 }}>×</button>
+            <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+            <span style={{ fontSize:11, color:'#9ca3af' }}>{(f.size/1024).toFixed(0)}KB</span>
+            <button onClick={() => onChange(files.filter((_,j) => j!==i))} style={{ background:'none', border:'none', cursor:'pointer', color:'#dc2626', fontSize:14 }}>×</button>
           </div>)}
           <button onClick={() => ref.current.click()} disabled={uploading}
-            style={{ padding: '6px 14px', background: '#fff', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
+            style={{ padding:'6px 14px', background:'#fff', border:'1px solid #d1d5db', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', color:'#374151' }}>
             {uploading ? '업로드 중...' : '+ 파일 선택'}
           </button>
-          <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 8 }}>최대 50MB</span>
-          <input ref={ref} type="file" multiple onChange={handleChange} style={{ display: 'none' }} />
+          <span style={{ fontSize:11, color:'#9ca3af', marginLeft:8 }}>최대 50MB</span>
+          <input ref={ref} type="file" multiple onChange={handleChange} style={{ display:'none' }} />
         </div>
       </div>;
     }
+
     function FileList({ files }) {
       if (!files || !files.length) return null;
-      return <div style={{ marginTop: 10, padding: '10px 12px', background: '#f3f4f6', borderRadius: 8 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>첨부파일 ({files.length})</div>
+      return <div style={{ marginTop:10, padding:'10px 12px', background:'#f3f4f6', borderRadius:8 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:6 }}>첨부파일 ({files.length})</div>
         {files.map((f, i) => <a key={i} href={f.url} target="_blank" rel="noreferrer"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: 13, color: '#1a5c8a', textDecoration: 'none' }}>
+          style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4, fontSize:13, color:'#1a5c8a', textDecoration:'none' }}>
           <span>{fileIcon(f.name)}</span>
-          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-          <span style={{ fontSize: 11, color: '#9ca3af' }}>{(f.size / 1024).toFixed(0)}KB ↓</span>
+          <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</span>
+          <span style={{ fontSize:11, color:'#9ca3af' }}>{(f.size/1024).toFixed(0)}KB ↓</span>
         </a>)}
       </div>;
     }
 
-    // ── 공지/현안 탭 ──────────────────────────────────────────────
-    function NoticeTab({ user }) {
-      const [notices, setNotices] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [showForm, setShowForm] = React.useState(false);
-      const [editItem, setEditItem] = React.useState(null);
-      const [selected, setSelected] = React.useState(null);
+    /* ══════════════════════════════════════════════════════════════
+       공지/현안 탭
+    ══════════════════════════════════════════════════════════════ */
+    function NoticeTab({ user, onUnread }) {
+      const [notices, setNotices]     = React.useState([]);
+      const [loading, setLoading]     = React.useState(true);
+      const [err, setErr]             = React.useState('');
+      const [showForm, setShowForm]   = React.useState(false);
+      const [editItem, setEditItem]   = React.useState(null);
+      const [selected, setSelected]   = React.useState(null);
       const [confirmDel, setConfirmDel] = React.useState(null);
-      const [form, setForm] = React.useState({ target: '전체', title: '', content: '' });
+      const [form, setForm]           = React.useState({ target:'전체', title:'', content:'' });
       const [formFiles, setFormFiles] = React.useState([]);
       const [uploading, setUploading] = React.useState(false);
-      const [comment, setComment] = React.useState('');
-      const [saving, setSaving] = React.useState(false);
+      const [comment, setComment]     = React.useState('');
+      const [saving, setSaving]       = React.useState(false);
+      const [search, setSearch]       = React.useState('');
+      const [pinnedIds, setPinnedIds] = React.useState(() => lsGet('church_pinned_notices', []));
+
+      const lsKey = `church_last_seen_notice_${user.id}`;
+      const lastSeen = React.useRef(localStorage.getItem(lsKey) || '1970-01-01T00:00:00.000Z');
 
       const targetOpts = user.id === 'pastor'
-        ? [{ value: '전체', label: '전체 공유' }, ...GROUPS.map(g => ({ value: g, label: `${g}그룹` }))]
-        : [{ value: '전체', label: '전체 공유' }, { value: user.group, label: `${user.group}그룹 → 담임목사` }];
+        ? [{ value:'전체', label:'전체 공유' }, ...GROUPS.map(g => ({ value:g, label:`${g}그룹` }))]
+        : [{ value:'전체', label:'전체 공유' }, { value:user.group, label:`${user.group}그룹 → 담임목사` }];
 
-      async function fetch() {
-        setLoading(true);
-        const { data } = await sb.from('notices').select('*').order('date', { ascending: false });
-        setNotices(data || []); setLoading(false);
+      async function loadData() {
+        setLoading(true); setErr('');
+        const { data, error } = await sb.from('notices').select('*').order('date', { ascending:false });
+        if (error) { setErr('데이터 로드 오류: ' + error.message); setLoading(false); return; }
+        setNotices(data || []);
+        setLoading(false);
       }
-      React.useEffect(() => { fetch(); }, []);
 
-      const visible = notices.filter(n => user.id === 'pastor' || n.target === '전체' || n.target === user.group);
+      React.useEffect(() => {
+        loadData();
+        // 실시간 구독 (Supabase Realtime이 활성화된 경우 자동 갱신)
+        const ch = sb.channel('notices-ch')
+          .on('postgres_changes', { event:'*', schema:'public', table:'notices' }, () => loadData())
+          .subscribe();
+        // 폴링 백업 (30초마다)
+        const poll = setInterval(loadData, 30000);
+        // 2초 후 읽음 처리
+        const timer = setTimeout(() => {
+          const now = new Date().toISOString();
+          localStorage.setItem(lsKey, now);
+          lastSeen.current = now;
+          onUnread && onUnread(0);
+        }, 2000);
+        return () => { ch.unsubscribe(); clearInterval(poll); clearTimeout(timer); };
+      }, []);
 
-      function openNew() { setEditItem(null); setForm({ target: '전체', title: '', content: '' }); setFormFiles([]); setShowForm(true); }
-      function openEdit(n) { setEditItem(n); setForm({ target: n.target, title: n.title, content: n.content }); setFormFiles(n.files || []); setShowForm(true); setSelected(null); }
+      // selected 동기화
+      React.useEffect(() => {
+        if (selected) {
+          const updated = notices.find(n => n.id === selected.id);
+          setSelected(updated || null);
+        }
+      }, [notices]);
+
+      // 미읽음 계산
+      React.useEffect(() => {
+        const visible = notices.filter(n => user.id==='pastor' || n.target==='전체' || n.target===user.group);
+        const cnt = visible.filter(n => n.author_id !== user.id && n.date > lastSeen.current).length;
+        onUnread && onUnread(cnt);
+      }, [notices]);
+
+      const visible = notices.filter(n => user.id==='pastor' || n.target==='전체' || n.target===user.group);
+      const searched = visible.filter(n => !search ||
+        n.title.includes(search) || (n.content||'').includes(search) || n.author_name.includes(search));
+      const sorted = [
+        ...searched.filter(n => pinnedIds.includes(n.id)),
+        ...searched.filter(n => !pinnedIds.includes(n.id)),
+      ];
+
+      function isNew(item) { return item.author_id !== user.id && item.date > lastSeen.current; }
+
+      function togglePin(id) {
+        const p = pinnedIds.includes(id) ? pinnedIds.filter(x => x!==id) : [...pinnedIds, id];
+        setPinnedIds(p); lsSet('church_pinned_notices', p);
+      }
+
+      function openNew() { setEditItem(null); setForm({ target:'전체', title:'', content:'' }); setFormFiles([]); setShowForm(true); }
+      function openEdit(n) { setEditItem(n); setForm({ target:n.target, title:n.title, content:n.content }); setFormFiles(n.files||[]); setShowForm(true); setSelected(null); }
 
       async function submit() {
-        if (!form.title.trim() || !form.content.trim()) return;
+        if (!form.title.trim() || !form.content.trim()) { alert('제목과 내용을 입력하세요.'); return; }
         setSaving(true);
         if (editItem) {
-          await sb.from('notices').update({ target: form.target, title: form.title, content: form.content, files: formFiles }).eq('id', editItem.id);
+          const { error } = await sb.from('notices').update({ target:form.target, title:form.title, content:form.content, files:formFiles }).eq('id', editItem.id);
+          if (error) { alert('수정 오류: ' + error.message); setSaving(false); return; }
         } else {
-          await sb.from('notices').insert({
-            id: genId(), author_id: user.id, author_name: user.name,
-            author_role: user.id === 'pastor' ? '담임목사' : `${user.group}그룹 장로`,
-            target: form.target, title: form.title, content: form.content,
-            date: new Date().toISOString(), comments: [], files: formFiles
+          const { error } = await sb.from('notices').insert({
+            id:genId(), author_id:user.id, author_name:user.name,
+            author_role: user.id==='pastor' ? '담임목사' : `${user.group}그룹 장로`,
+            target:form.target, title:form.title, content:form.content,
+            date:new Date().toISOString(), comments:[], files:formFiles
           });
-          // 알림 발송
-          const targetLabel = form.target === '전체' ? '전체' : form.target + '그룹';
-          sendPushNotification(
-            `📢 새 공지 [${targetLabel}]`,
-            `${user.name} ${user.id === 'pastor' ? '담임목사' : `${user.group}그룹 장로`}: ${form.title}`
-          );
+          if (error) { alert('등록 오류: ' + error.message); setSaving(false); return; }
+          const targetLabel = form.target==='전체' ? '전체' : form.target+'그룹';
+          sendPushNotification(`📢 새 공지 [${targetLabel}]`,
+            `${user.name} ${user.id==='pastor'?'담임목사':`${user.group}그룹 장로`}: ${form.title}`);
         }
-        setShowForm(false); setSaving(false); fetch();
+        setShowForm(false); setSaving(false); loadData();
       }
-      async function doDelete(id) { await sb.from('notices').delete().eq('id', id); setConfirmDel(null); setSelected(null); fetch(); }
+
+      async function doDelete(id) {
+        const { error } = await sb.from('notices').delete().eq('id', id);
+        if (error) { alert('삭제 오류: ' + error.message); return; }
+        setConfirmDel(null); setSelected(null); loadData();
+      }
+
       async function addComment() {
         if (!comment.trim() || !selected) return;
         setSaving(true);
-        const newC = { id: genId(), author_name: user.name, author_role: user.id === 'pastor' ? '담임목사' : `${user.group}그룹 장로`, content: comment, date: new Date().toISOString() };
-        await sb.from('notices').update({ comments: [...(selected.comments || []), newC] }).eq('id', selected.id);
-        setComment(''); setSaving(false);
-        const { data } = await sb.from('notices').select('*').order('date', { ascending: false });
-        setNotices(data || []); setSelected((data || []).find(n => n.id === selected.id));
+        const newC = { id:genId(), author_id:user.id, author_name:user.name,
+          author_role: user.id==='pastor'?'담임목사':`${user.group}그룹 장로`,
+          content:comment, date:new Date().toISOString() };
+        const { error } = await sb.from('notices').update({ comments:[...(selected.comments||[]), newC] }).eq('id', selected.id);
+        if (error) { alert('댓글 오류: ' + error.message); setSaving(false); return; }
+        setComment(''); setSaving(false); loadData();
       }
 
+      async function deleteComment(commentId) {
+        if (!selected) return;
+        const updated = (selected.comments||[]).filter(c => c.id !== commentId);
+        const { error } = await sb.from('notices').update({ comments:updated }).eq('id', selected.id);
+        if (error) { alert('삭제 오류: ' + error.message); return; }
+        loadData();
+      }
+
+      function handleCommentKey(e) { if (e.key==='Enter' && (e.ctrlKey||e.metaKey)) addComment(); }
+
       return <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>공지 / 현안 ({visible.length})</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={fetch} outline color='#6b7280' small>새로고침</Btn>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontSize:15, fontWeight:700, color:'#1a1a2e' }}>공지 / 현안 ({visible.length})</span>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn onClick={loadData} outline color='#6b7280' small>새로고침</Btn>
             <Btn onClick={openNew} color='#8B6914'>+ 새 공지</Btn>
           </div>
         </div>
-        {loading ? <Spinner /> : visible.length === 0
-          ? <div style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>등록된 공지가 없습니다.</div>
-          : visible.map(n => <Card key={n.id} style={{ marginBottom: 10 }}>
-            <div onClick={() => { setSelected(n); setComment(''); }} style={{ cursor: 'pointer' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e', flex: 1, marginRight: 8 }}>{n.title}</span>
-                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                  {(n.files || []).length > 0 && <Badge text={`📎${n.files.length}`} color='#6b7280' />}
-                  <Badge text={n.target === '전체' ? '전체' : n.target + '그룹'} color={n.target === '전체' ? '#8B6914' : '#1a5c8a'} />
+        <SearchBar value={search} onChange={setSearch} />
+        <ErrBox msg={err} />
+        {loading ? <Spinner /> : sorted.length===0
+          ? <div style={{ textAlign:'center', color:'#9ca3af', padding:40 }}>
+              {search ? '검색 결과가 없습니다.' : '등록된 공지가 없습니다.'}
+            </div>
+          : sorted.map(n => <Card key={n.id} style={{ marginBottom:10, borderLeft: pinnedIds.includes(n.id)?'4px solid #8B6914':undefined }}>
+            <div onClick={() => { setSelected(n); setComment(''); }} style={{ cursor:'pointer' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, flex:1, marginRight:8 }}>
+                  {isNew(n) && <span className="new-dot" title="새 공지" />}
+                  <span style={{ fontSize:14, fontWeight:700, color:'#1a1a2e' }}>{pinnedIds.includes(n.id)?'📌 ':''}{n.title}</span>
+                </div>
+                <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                  {(n.files||[]).length>0 && <Badge text={`📎${n.files.length}`} color='#6b7280' />}
+                  <Badge text={n.target==='전체'?'전체':n.target+'그룹'} color={n.target==='전체'?'#8B6914':'#1a5c8a'} />
                 </div>
               </div>
-              <div style={{ fontSize: 13, color: '#4b5563', marginBottom: 6, lineHeight: 1.5 }}>{n.content.slice(0, 80)}{n.content.length > 80 ? '…' : ''}</div>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>{n.author_name} {n.author_role} · {fmtDate(n.date)} · 댓글 {(n.comments || []).length}개</div>
+              <div style={{ fontSize:13, color:'#4b5563', marginBottom:6, lineHeight:1.5 }}>{n.content.slice(0,80)}{n.content.length>80?'…':''}</div>
+              <div style={{ fontSize:11, color:'#9ca3af' }}>{n.author_name} {n.author_role} · {fmtDate(n.date)} · 댓글 {(n.comments||[]).length}개</div>
             </div>
-            <ActionBtns canEdit={n.author_id === user.id} canDelete={user.id === 'pastor'}
-              onEdit={() => openEdit(n)} onDelete={() => setConfirmDel(n.id)} />
+            <div style={{ display:'flex', gap:6, marginTop:10, borderTop:'1px solid #f3f4f6', paddingTop:10 }}>
+              {user.id==='pastor' && <button onClick={ev => { ev.stopPropagation(); togglePin(n.id); }}
+                style={{ padding:'5px 14px', borderRadius:6, border:'1px solid #d1d5db', background:pinnedIds.includes(n.id)?'#fef3c7':'#f9fafb',
+                  fontSize:12, fontWeight:700, cursor:'pointer', color:'#8B6914' }}>
+                {pinnedIds.includes(n.id)?'📌 고정 해제':'📌 상단 고정'}
+              </button>}
+              {n.author_id===user.id && <button onClick={ev => { ev.stopPropagation(); openEdit(n); }}
+                style={{ padding:'5px 14px', borderRadius:6, border:'1px solid #d1d5db', background:'#f9fafb', fontSize:12, fontWeight:700, cursor:'pointer', color:'#374151' }}>✏️ 수정</button>}
+              {user.id==='pastor' && <button onClick={ev => { ev.stopPropagation(); setConfirmDel(n.id); }}
+                style={{ padding:'5px 14px', borderRadius:6, border:'1px solid #fca5a5', background:'#fff5f5', fontSize:12, fontWeight:700, cursor:'pointer', color:'#dc2626' }}>🗑️ 삭제</button>}
+            </div>
           </Card>)}
 
-        {showForm && <Modal title={editItem ? '공지 수정' : '새 공지 작성'} onClose={() => setShowForm(false)}>
-          <Sel label="공유 대상" value={form.target} onChange={v => setForm({ ...form, target: v })} options={targetOpts} />
-          <Inp label="제목" value={form.title} onChange={v => setForm({ ...form, title: v })} placeholder="제목을 입력하세요" />
-          <Txt label="내용" value={form.content} onChange={v => setForm({ ...form, content: v })} rows={5} placeholder="내용을 입력하세요" />
+        {showForm && <Modal title={editItem?'공지 수정':'새 공지 작성'} onClose={() => setShowForm(false)}>
+          <Sel label="공유 대상" value={form.target} onChange={v => setForm({...form,target:v})} options={targetOpts} />
+          <Inp label="제목" value={form.title} onChange={v => setForm({...form,title:v})} placeholder="제목을 입력하세요" />
+          <Txt label="내용" value={form.content} onChange={v => setForm({...form,content:v})} rows={5} placeholder="내용을 입력하세요" />
           <FileUploader files={formFiles} onChange={setFormFiles} uploading={uploading} setUploading={setUploading} folder="notices" />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
             <Btn outline color='#6b7280' onClick={() => setShowForm(false)}>취소</Btn>
-            <Btn color='#8B6914' onClick={submit} disabled={saving || uploading}>{saving ? '저장중…' : (editItem ? '수정 완료' : '등록')}</Btn>
+            <Btn color='#8B6914' onClick={submit} disabled={saving||uploading}>{saving?'저장중…':editItem?'수정 완료':'등록'}</Btn>
           </div>
         </Modal>}
 
         {selected && <Modal title={selected.title} onClose={() => setSelected(null)}>
-          <div style={{ marginBottom: 10 }}>
-            <Badge text={selected.target === '전체' ? '전체 공지' : selected.target + '그룹'} color='#8B6914' />
-            <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8 }}>{selected.author_name} {selected.author_role} · {fmtDate(selected.date)}</span>
+          <div style={{ marginBottom:10 }}>
+            <Badge text={selected.target==='전체'?'전체 공지':selected.target+'그룹'} color='#8B6914' />
+            <span style={{ fontSize:12, color:'#9ca3af', marginLeft:8 }}>{selected.author_name} {selected.author_role} · {fmtDate(selected.date)}</span>
           </div>
-          <div style={{ fontSize: 14, color: '#1a1a2e', lineHeight: 1.8, marginBottom: 12, whiteSpace: 'pre-wrap', background: '#f9fafb', padding: 12, borderRadius: 8 }}>{selected.content}</div>
+          <div style={{ fontSize:14, color:'#1a1a2e', lineHeight:1.8, marginBottom:12, whiteSpace:'pre-wrap', background:'#f9fafb', padding:12, borderRadius:8 }}>{selected.content}</div>
           <FileList files={selected.files} />
-          <ActionBtns canEdit={selected.author_id === user.id} canDelete={user.id === 'pastor'}
+          <ActionBtns canEdit={selected.author_id===user.id} canDelete={user.id==='pastor'}
             onEdit={() => openEdit(selected)} onDelete={() => setConfirmDel(selected.id)} />
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#374151', margin: '14px 0 8px' }}>의견 / 답변 ({(selected.comments || []).length})</div>
-          {(selected.comments || []).map(c => <div key={c.id} style={{ background: '#f3f4f6', borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>{c.author_name} <span style={{ color: '#9ca3af', fontWeight: 400 }}>{c.author_role} · {fmtDate(c.date)}</span></div>
-            <div style={{ fontSize: 13, color: '#1a1a2e', marginTop: 4, whiteSpace: 'pre-wrap' }}>{c.content}</div>
+          <div style={{ fontWeight:700, fontSize:13, color:'#374151', margin:'14px 0 8px' }}>의견 / 답변 ({(selected.comments||[]).length})</div>
+          {(selected.comments||[]).map(c => <div key={c.id} style={{ background:'#f3f4f6', borderRadius:8, padding:'10px 12px', marginBottom:8, position:'relative' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151' }}>{c.author_name} <span style={{ color:'#9ca3af', fontWeight:400 }}>{c.author_role} · {fmtDate(c.date)}</span></div>
+            <div style={{ fontSize:13, color:'#1a1a2e', marginTop:4, whiteSpace:'pre-wrap', paddingRight:28 }}>{c.content}</div>
+            {(c.author_id===user.id || user.id==='pastor') &&
+              <button onClick={() => deleteComment(c.id)}
+                style={{ position:'absolute', top:8, right:8, background:'none', border:'none', cursor:'pointer', color:'#9ca3af', fontSize:14 }}
+                title="댓글 삭제">×</button>}
           </div>)}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="의견을 입력하세요..." rows={2}
-              style={{ flex: 1, padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 13, resize: 'none', outline: 'none' }} />
+          <div style={{ display:'flex', gap:8, marginTop:10 }}>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} onKeyDown={handleCommentKey}
+              placeholder="의견을 입력하세요... (Ctrl+Enter로 등록)" rows={2}
+              style={{ flex:1, padding:'8px 10px', border:'1px solid #d1d5db', borderRadius:7, fontSize:13, resize:'none', outline:'none' }} />
             <Btn onClick={addComment} color='#8B6914' disabled={saving}>등록</Btn>
           </div>
+          <div style={{ fontSize:11, color:'#9ca3af', marginTop:4 }}>Ctrl+Enter로 빠르게 등록 · Esc로 닫기</div>
         </Modal>}
         {confirmDel && <ConfirmDelete onConfirm={() => doDelete(confirmDel)} onCancel={() => setConfirmDel(null)} />}
       </div>;
     }
 
-    // ── 그룹업무 탭 ───────────────────────────────────────────────
-    function TaskTab({ user }) {
-      const [tasks, setTasks] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [showForm, setShowForm] = React.useState(false);
-      const [editItem, setEditItem] = React.useState(null);
-      const [selected, setSelected] = React.useState(null);
+    /* ══════════════════════════════════════════════════════════════
+       그룹업무 탭
+    ══════════════════════════════════════════════════════════════ */
+    function TaskTab({ user, onUnread }) {
+      const [tasks, setTasks]         = React.useState([]);
+      const [loading, setLoading]     = React.useState(true);
+      const [err, setErr]             = React.useState('');
+      const [showForm, setShowForm]   = React.useState(false);
+      const [editItem, setEditItem]   = React.useState(null);
+      const [selected, setSelected]   = React.useState(null);
       const [confirmDel, setConfirmDel] = React.useState(null);
-      const [fGroup, setFGroup] = React.useState('전체');
-      const [fStatus, setFStatus] = React.useState('전체');
-      const [comment, setComment] = React.useState('');
-      const [saving, setSaving] = React.useState(false);
+      const [fGroup, setFGroup]       = React.useState('전체');
+      const [fStatus, setFStatus]     = React.useState('전체');
+      const [comment, setComment]     = React.useState('');
+      const [saving, setSaving]       = React.useState(false);
       const [uploading, setUploading] = React.useState(false);
       const [formFiles, setFormFiles] = React.useState([]);
-      const [form, setForm] = React.useState({ group: user.group || GROUPS[0], title: '', content: '', priority: '중간', deadline: '' });
+      const [search, setSearch]       = React.useState('');
+      const [form, setForm]           = React.useState({ group:user.group||GROUPS[0], title:'', content:'', priority:'중간', deadline:'' });
 
-      async function fetch() {
-        setLoading(true);
-        const { data } = await sb.from('tasks').select('*').order('date', { ascending: false });
-        setTasks(data || []); setLoading(false);
+      const lsKey = `church_last_seen_task_${user.id}`;
+      const lastSeen = React.useRef(localStorage.getItem(lsKey) || '1970-01-01T00:00:00.000Z');
+
+      async function loadData() {
+        setLoading(true); setErr('');
+        const { data, error } = await sb.from('tasks').select('*').order('date', { ascending:false });
+        if (error) { setErr('데이터 로드 오류: ' + error.message); setLoading(false); return; }
+        setTasks(data || []);
+        setLoading(false);
       }
-      React.useEffect(() => { fetch(); }, []);
 
-      const filtered = (tasks || []).filter(t =>
-        (fGroup === '전체' || t.group === fGroup) && (fStatus === '전체' || t.status === fStatus) && (user.id === 'pastor' || t.group === user.group)
+      React.useEffect(() => {
+        loadData();
+        const ch = sb.channel('tasks-ch')
+          .on('postgres_changes', { event:'*', schema:'public', table:'tasks' }, () => loadData())
+          .subscribe();
+        const poll = setInterval(loadData, 30000);
+        const timer = setTimeout(() => {
+          const now = new Date().toISOString();
+          localStorage.setItem(lsKey, now);
+          lastSeen.current = now;
+          onUnread && onUnread(0);
+        }, 2000);
+        return () => { ch.unsubscribe(); clearInterval(poll); clearTimeout(timer); };
+      }, []);
+
+      React.useEffect(() => {
+        if (selected) {
+          const updated = tasks.find(t => t.id===selected.id);
+          setSelected(updated || null);
+        }
+      }, [tasks]);
+
+      React.useEffect(() => {
+        const visible = tasks.filter(t => user.id==='pastor' || t.group===user.group);
+        const cnt = visible.filter(t => t.author_id !== user.id && t.date > lastSeen.current).length;
+        onUnread && onUnread(cnt);
+      }, [tasks]);
+
+      function isNew(item) { return item.author_id !== user.id && item.date > lastSeen.current; }
+
+      const allTasks = tasks.filter(t => user.id==='pastor' || t.group===user.group);
+      const filtered = allTasks.filter(t =>
+        (fGroup==='전체' || t.group===fGroup) &&
+        (fStatus==='전체' || t.status===fStatus) &&
+        (!search || t.title.includes(search) || (t.content||'').includes(search) || t.author_name.includes(search))
       );
 
-      function openNew() { setEditItem(null); setForm({ group: user.group || GROUPS[0], title: '', content: '', priority: '중간', deadline: '' }); setFormFiles([]); setShowForm(true); }
-      function openEdit(t) { setEditItem(t); setForm({ group: t.group, title: t.title, content: t.content, priority: t.priority, deadline: t.deadline || '' }); setFormFiles(t.files || []); setShowForm(true); setSelected(null); }
+      // 그룹별 완료 현황
+      const progress = GROUPS.map(g => {
+        const gt = (user.id==='pastor' ? tasks : tasks.filter(t => t.group===user.group)).filter(t => t.group===g);
+        return { group:g, total:gt.length, done:gt.filter(t => t.status==='완료').length };
+      }).filter(p => user.id==='pastor' || p.group===user.group);
+
+      const allG = ['전체', ...GROUPS]; const allS = ['전체','검토중','승인','보류','완료'];
+
+      function openNew() { setEditItem(null); setForm({ group:user.group||GROUPS[0], title:'', content:'', priority:'중간', deadline:'' }); setFormFiles([]); setShowForm(true); }
+      function openEdit(t) { setEditItem(t); setForm({ group:t.group, title:t.title, content:t.content, priority:t.priority, deadline:t.deadline||'' }); setFormFiles(t.files||[]); setShowForm(true); setSelected(null); }
 
       async function submit() {
-        if (!form.title.trim()) return;
+        if (!form.title.trim()) { alert('제목을 입력하세요.'); return; }
         setSaving(true);
         if (editItem) {
-          await sb.from('tasks').update({ title: form.title, content: form.content, priority: form.priority, deadline: form.deadline, files: formFiles }).eq('id', editItem.id);
+          const { error } = await sb.from('tasks').update({ title:form.title, content:form.content, priority:form.priority, deadline:form.deadline, files:formFiles }).eq('id', editItem.id);
+          if (error) { alert('수정 오류: ' + error.message); setSaving(false); return; }
         } else {
-          await sb.from('tasks').insert({
-            id: genId(), group: form.group, title: form.title, content: form.content,
-            priority: form.priority, deadline: form.deadline, status: '검토중',
-            author_id: user.id, author_name: user.name, date: new Date().toISOString(), comments: [], files: formFiles
+          const { error } = await sb.from('tasks').insert({
+            id:genId(), group:form.group, title:form.title, content:form.content,
+            priority:form.priority, deadline:form.deadline, status:'검토중',
+            author_id:user.id, author_name:user.name, date:new Date().toISOString(), comments:[], files:formFiles
           });
-          // 알림 발송
-          sendPushNotification(
-            `📋 업무 보고 [${form.group}그룹]`,
-            `${user.name}: ${form.title}`
-          );
+          if (error) { alert('등록 오류: ' + error.message); setSaving(false); return; }
+          sendPushNotification(`📋 업무 보고 [${form.group}그룹]`, `${user.name}: ${form.title}`);
         }
-        setFormFiles([]); setShowForm(false); setSaving(false); fetch();
+        setFormFiles([]); setShowForm(false); setSaving(false); loadData();
       }
-      async function updateStatus(id, status) {
-        await sb.from('tasks').update({ status }).eq('id', id);
-        const { data } = await sb.from('tasks').select('*').order('date', { ascending: false });
-        setTasks(data || []); setSelected((data || []).find(t => t.id === id));
+
+      async function updateStatus(id, status, taskTitle, taskGroup) {
+        const { error } = await sb.from('tasks').update({ status }).eq('id', id);
+        if (error) { alert('상태 변경 오류: ' + error.message); return; }
+        sendPushNotification(`📋 업무 상태 변경 [${taskGroup}그룹]`, `"${taskTitle}" → ${status}`);
+        loadData();
       }
-      async function doDelete(id) { await sb.from('tasks').delete().eq('id', id); setConfirmDel(null); setSelected(null); fetch(); }
+
+      async function doDelete(id) {
+        const { error } = await sb.from('tasks').delete().eq('id', id);
+        if (error) { alert('삭제 오류: ' + error.message); return; }
+        setConfirmDel(null); setSelected(null); loadData();
+      }
+
       async function addComment() {
         if (!comment.trim() || !selected) return;
         setSaving(true);
-        const newC = { id: genId(), author_name: user.name, author_role: user.id === 'pastor' ? '담임목사' : `${user.group}그룹 장로`, content: comment, date: new Date().toISOString() };
-        await sb.from('tasks').update({ comments: [...(selected.comments || []), newC] }).eq('id', selected.id);
-        setComment(''); setSaving(false);
-        const { data } = await sb.from('tasks').select('*').order('date', { ascending: false });
-        setTasks(data || []); setSelected((data || []).find(t => t.id === selected.id));
+        const newC = { id:genId(), author_id:user.id, author_name:user.name,
+          author_role: user.id==='pastor'?'담임목사':`${user.group}그룹 장로`,
+          content:comment, date:new Date().toISOString() };
+        const { error } = await sb.from('tasks').update({ comments:[...(selected.comments||[]), newC] }).eq('id', selected.id);
+        if (error) { alert('댓글 오류: ' + error.message); setSaving(false); return; }
+        setComment(''); setSaving(false); loadData();
       }
 
-      const allG = ['전체', ...GROUPS]; const allS = ['전체', '검토중', '승인', '보류', '완료'];
+      async function deleteComment(commentId) {
+        if (!selected) return;
+        const updated = (selected.comments||[]).filter(c => c.id !== commentId);
+        const { error } = await sb.from('tasks').update({ comments:updated }).eq('id', selected.id);
+        if (error) { alert('삭제 오류: ' + error.message); return; }
+        loadData();
+      }
+
+      function handleCommentKey(e) { if (e.key==='Enter' && (e.ctrlKey||e.metaKey)) addComment(); }
 
       return <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>그룹 업무 ({filtered.length})</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={fetch} outline color='#6b7280' small>새로고침</Btn>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontSize:15, fontWeight:700, color:'#1a1a2e' }}>그룹 업무 ({filtered.length})</span>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn onClick={loadData} outline color='#6b7280' small>새로고침</Btn>
             <Btn onClick={openNew} color='#1a5c8a'>+ 업무 보고</Btn>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-          {(user.id === 'pastor' ? allG : ['전체']).map(g => <button key={g} onClick={() => setFGroup(g)}
-            style={{
-              padding: '4px 11px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-              background: fGroup === g ? '#1a5c8a' : '#e5e7eb', color: fGroup === g ? '#fff' : '#374151'
-            }}>{g === '전체' ? '전체' : g + '그룹'}</button>)}
-          <span style={{ width: 1, background: '#d1d5db', margin: '0 3px' }} />
-          {allS.map(s => <button key={s} onClick={() => setFStatus(s)}
-            style={{
-              padding: '4px 11px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-              background: fStatus === s ? '#1a1a2e' : '#e5e7eb', color: fStatus === s ? '#fff' : '#374151'
-            }}>{s}</button>)}
-        </div>
-        {loading ? <Spinner /> : filtered.length === 0
-          ? <div style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>등록된 업무가 없습니다.</div>
-          : filtered.map(t => <Card key={t.id} style={{ marginBottom: 10 }}>
-            <div onClick={() => { setSelected(t); setComment(''); }} style={{ cursor: 'pointer' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e', flex: 1, marginRight: 8 }}>{t.title}</span>
-                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                  {(t.files || []).length > 0 && <Badge text={`📎${t.files.length}`} color='#6b7280' />}
-                  <Badge text={t.group + '그룹'} color='#1a5c8a' />
-                  <Badge text={t.status} color={STATUS_COLORS[t.status]} />
-                </div>
-              </div>
-              <div style={{ fontSize: 13, color: '#4b5563', marginBottom: 8 }}>{(t.content || '').slice(0, 70)}{(t.content || '').length > 70 ? '…' : ''}</div>
-              <div style={{ display: 'flex', gap: 8, fontSize: 11, color: '#9ca3af', alignItems: 'center', flexWrap: 'wrap' }}>
-                <Badge text={t.priority} color={PRIORITY_COLORS[t.priority]} />
-                {t.deadline && <span>마감 {t.deadline}</span>}
-                <span>{t.author_name} · {fmtDate(t.date)}</span>
-                <span>댓글 {(t.comments || []).length}</span>
-              </div>
-            </div>
-            <ActionBtns canEdit={t.author_id === user.id} canDelete={user.id === 'pastor'}
-              onEdit={() => openEdit(t)} onDelete={() => setConfirmDel(t.id)} />
-          </Card>)}
 
-        {showForm && <Modal title={editItem ? '업무 수정' : '업무 보고 / 제안'} onClose={() => setShowForm(false)}>
-          {!editItem && user.id === 'pastor' && <Sel label="그룹" value={form.group} onChange={v => setForm({ ...form, group: v })} options={GROUPS} />}
-          <Inp label="제목" value={form.title} onChange={v => setForm({ ...form, title: v })} placeholder="업무 제목" />
-          <Txt label="내용" value={form.content} onChange={v => setForm({ ...form, content: v })} rows={4} placeholder="업무 현황, 제안사항 등" />
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1 }}><Sel label="우선순위" value={form.priority} onChange={v => setForm({ ...form, priority: v })} options={['높음', '중간', '낮음']} /></div>
-            <div style={{ flex: 1 }}><Inp label="마감기한" type="date" value={form.deadline} onChange={v => setForm({ ...form, deadline: v })} /></div>
+        {/* 그룹별 완료 현황 */}
+        {progress.length > 0 && progress.some(p => p.total > 0) && <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+          {progress.filter(p => p.total>0).map(p => {
+            const pct = Math.round(p.done/p.total*100);
+            return <div key={p.group} style={{ flex:1, minWidth:120, background:'#fff', borderRadius:8, padding:'8px 12px', border:'1px solid #e5e7eb' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, fontWeight:700, color:'#374151', marginBottom:5 }}>
+                <span>{p.group}</span><span>{p.done}/{p.total}</span>
+              </div>
+              <div style={{ height:6, background:'#e5e7eb', borderRadius:3, overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${pct}%`, background:pct===100?'#16a34a':'#1a5c8a', borderRadius:3, transition:'width 0.3s' }} />
+              </div>
+            </div>;
+          })}
+        </div>}
+
+        <SearchBar value={search} onChange={setSearch} />
+        <div style={{ display:'flex', gap:6, marginBottom:12, flexWrap:'wrap' }}>
+          {(user.id==='pastor' ? allG : ['전체']).map(g => <button key={g} onClick={() => setFGroup(g)}
+            style={{ padding:'4px 11px', borderRadius:20, border:'none', cursor:'pointer', fontSize:12, fontWeight:700,
+              background:fGroup===g?'#1a5c8a':'#e5e7eb', color:fGroup===g?'#fff':'#374151' }}>
+            {g==='전체'?'전체':g+'그룹'}
+          </button>)}
+          <span style={{ width:1, background:'#d1d5db', margin:'0 3px' }} />
+          {allS.map(s => <button key={s} onClick={() => setFStatus(s)}
+            style={{ padding:'4px 11px', borderRadius:20, border:'none', cursor:'pointer', fontSize:12, fontWeight:700,
+              background:fStatus===s?'#1a1a2e':'#e5e7eb', color:fStatus===s?'#fff':'#374151' }}>{s}</button>)}
+        </div>
+        <ErrBox msg={err} />
+        {loading ? <Spinner /> : filtered.length===0
+          ? <div style={{ textAlign:'center', color:'#9ca3af', padding:40 }}>
+              {search||fGroup!=='전체'||fStatus!=='전체' ? '해당 조건의 업무가 없습니다.' : '등록된 업무가 없습니다.'}
+            </div>
+          : filtered.map(t => {
+              const near = isDeadlineNear(t.deadline);
+              const past = isDeadlinePast(t.deadline);
+              return <Card key={t.id} style={{ marginBottom:10,
+                borderLeft: past&&t.status!=='완료' ? '4px solid #dc2626' : near&&t.status!=='완료' ? '4px solid #f59e0b' : undefined }}>
+                <div onClick={() => { setSelected(t); setComment(''); }} style={{ cursor:'pointer' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, flex:1, marginRight:8 }}>
+                      {isNew(t) && <span className="new-dot" title="새 업무" />}
+                      <span style={{ fontSize:14, fontWeight:700, color:'#1a1a2e' }}>{t.title}</span>
+                    </div>
+                    <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                      {(t.files||[]).length>0 && <Badge text={`📎${t.files.length}`} color='#6b7280' />}
+                      <Badge text={t.group+'그룹'} color='#1a5c8a' />
+                      <Badge text={t.status} color={STATUS_COLORS[t.status]} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize:13, color:'#4b5563', marginBottom:8 }}>{(t.content||'').slice(0,70)}{(t.content||'').length>70?'…':''}</div>
+                  <div style={{ display:'flex', gap:8, fontSize:11, color:'#9ca3af', alignItems:'center', flexWrap:'wrap' }}>
+                    <Badge text={t.priority} color={PRIORITY_COLORS[t.priority]} />
+                    {t.deadline && <span style={{ color: past&&t.status!=='완료'?'#dc2626':near&&t.status!=='완료'?'#f59e0b':'#9ca3af', fontWeight:near||past?700:400 }}>
+                      {past&&t.status!=='완료'?'⚠️ 마감 초과':''}
+                      {near&&!past&&t.status!=='완료'?'⏰ 마감 임박':''}
+                      {(!near&&!past)||t.status==='완료'?'마감':''} {t.deadline}
+                    </span>}
+                    <span>{t.author_name} · {fmtDate(t.date)}</span>
+                    <span>댓글 {(t.comments||[]).length}</span>
+                  </div>
+                </div>
+                <ActionBtns canEdit={t.author_id===user.id} canDelete={user.id==='pastor'}
+                  onEdit={() => openEdit(t)} onDelete={() => setConfirmDel(t.id)} />
+              </Card>;
+            })}
+
+        {showForm && <Modal title={editItem?'업무 수정':'업무 보고 / 제안'} onClose={() => setShowForm(false)}>
+          {!editItem && user.id==='pastor' && <Sel label="그룹" value={form.group} onChange={v => setForm({...form,group:v})} options={GROUPS} />}
+          <Inp label="제목" value={form.title} onChange={v => setForm({...form,title:v})} placeholder="업무 제목" />
+          <Txt label="내용" value={form.content} onChange={v => setForm({...form,content:v})} rows={4} placeholder="업무 현황, 제안사항 등" />
+          <div style={{ display:'flex', gap:10 }}>
+            <div style={{ flex:1 }}><Sel label="우선순위" value={form.priority} onChange={v => setForm({...form,priority:v})} options={['높음','중간','낮음']} /></div>
+            <div style={{ flex:1 }}><Inp label="마감기한" type="date" value={form.deadline} onChange={v => setForm({...form,deadline:v})} /></div>
           </div>
           <FileUploader files={formFiles} onChange={setFormFiles} uploading={uploading} setUploading={setUploading} folder="tasks" />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
             <Btn outline color='#6b7280' onClick={() => setShowForm(false)}>취소</Btn>
-            <Btn color='#1a5c8a' onClick={submit} disabled={saving || uploading}>{saving ? '저장중…' : (editItem ? '수정 완료' : '등록')}</Btn>
+            <Btn color='#1a5c8a' onClick={submit} disabled={saving||uploading}>{saving?'저장중…':editItem?'수정 완료':'등록'}</Btn>
           </div>
         </Modal>}
 
         {selected && <Modal title={selected.title} onClose={() => setSelected(null)}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-            <Badge text={selected.group + '그룹'} color='#1a5c8a' />
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
+            <Badge text={selected.group+'그룹'} color='#1a5c8a' />
             <Badge text={selected.priority} color={PRIORITY_COLORS[selected.priority]} />
             <Badge text={selected.status} color={STATUS_COLORS[selected.status]} />
-            {selected.deadline && <span style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>마감: {selected.deadline}</span>}
+            {selected.deadline && <span style={{ fontSize:12, color: isDeadlinePast(selected.deadline)&&selected.status!=='완료'?'#dc2626':isDeadlineNear(selected.deadline)&&selected.status!=='완료'?'#f59e0b':'#6b7280', alignSelf:'center', fontWeight:700 }}>
+              마감: {selected.deadline}
+            </span>}
           </div>
-          <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 12 }}>{selected.author_name} · {fmtDate(selected.date)}</div>
-          <div style={{ fontSize: 14, color: '#1a1a2e', lineHeight: 1.8, marginBottom: 12, whiteSpace: 'pre-wrap', background: '#f9fafb', padding: 12, borderRadius: 8 }}>{selected.content}</div>
+          <div style={{ fontSize:12, color:'#9ca3af', marginBottom:12 }}>{selected.author_name} · {fmtDate(selected.date)}</div>
+          <div style={{ fontSize:14, color:'#1a1a2e', lineHeight:1.8, marginBottom:12, whiteSpace:'pre-wrap', background:'#f9fafb', padding:12, borderRadius:8 }}>{selected.content}</div>
           <FileList files={selected.files} />
-          <ActionBtns canEdit={selected.author_id === user.id} canDelete={user.id === 'pastor'}
+          <ActionBtns canEdit={selected.author_id===user.id} canDelete={user.id==='pastor'}
             onEdit={() => openEdit(selected)} onDelete={() => setConfirmDel(selected.id)} />
-          {user.id === 'pastor' && <div style={{ margin: '14px 0' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8 }}>상태 변경</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {['검토중', '승인', '보류', '완료'].map(s => <Btn key={s} small color={STATUS_COLORS[s]} outline={selected.status !== s} onClick={() => updateStatus(selected.id, s)}>{s}</Btn>)}
+          {user.id==='pastor' && <div style={{ margin:'14px 0' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:8 }}>상태 변경</div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {['검토중','승인','보류','완료'].map(s => <Btn key={s} small color={STATUS_COLORS[s]} outline={selected.status!==s}
+                onClick={() => updateStatus(selected.id, s, selected.title, selected.group)}>{s}</Btn>)}
             </div>
           </div>}
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#374151', marginBottom: 8 }}>코멘트 ({(selected.comments || []).length})</div>
-          {(selected.comments || []).map(c => <div key={c.id} style={{ background: '#f3f4f6', borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>{c.author_name} <span style={{ color: '#9ca3af', fontWeight: 400 }}>{c.author_role} · {fmtDate(c.date)}</span></div>
-            <div style={{ fontSize: 13, color: '#1a1a2e', marginTop: 4, whiteSpace: 'pre-wrap' }}>{c.content}</div>
+          <div style={{ fontWeight:700, fontSize:13, color:'#374151', marginBottom:8 }}>코멘트 ({(selected.comments||[]).length})</div>
+          {(selected.comments||[]).map(c => <div key={c.id} style={{ background:'#f3f4f6', borderRadius:8, padding:'10px 12px', marginBottom:8, position:'relative' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151' }}>{c.author_name} <span style={{ color:'#9ca3af', fontWeight:400 }}>{c.author_role} · {fmtDate(c.date)}</span></div>
+            <div style={{ fontSize:13, color:'#1a1a2e', marginTop:4, whiteSpace:'pre-wrap', paddingRight:28 }}>{c.content}</div>
+            {(c.author_id===user.id || user.id==='pastor') &&
+              <button onClick={() => deleteComment(c.id)}
+                style={{ position:'absolute', top:8, right:8, background:'none', border:'none', cursor:'pointer', color:'#9ca3af', fontSize:14 }}
+                title="댓글 삭제">×</button>}
           </div>)}
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <textarea value={comment} onChange={e => setComment(e.target.value)} placeholder="코멘트 입력..." rows={2}
-              style={{ flex: 1, padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 13, resize: 'none', outline: 'none' }} />
+          <div style={{ display:'flex', gap:8, marginTop:10 }}>
+            <textarea value={comment} onChange={e => setComment(e.target.value)} onKeyDown={handleCommentKey}
+              placeholder="코멘트 입력... (Ctrl+Enter로 등록)" rows={2}
+              style={{ flex:1, padding:'8px 10px', border:'1px solid #d1d5db', borderRadius:7, fontSize:13, resize:'none', outline:'none' }} />
             <Btn onClick={addComment} color='#1a5c8a' disabled={saving}>등록</Btn>
           </div>
+          <div style={{ fontSize:11, color:'#9ca3af', marginTop:4 }}>Ctrl+Enter로 빠르게 등록 · Esc로 닫기</div>
         </Modal>}
         {confirmDel && <ConfirmDelete onConfirm={() => doDelete(confirmDel)} onCancel={() => setConfirmDel(null)} />}
       </div>;
     }
 
-    // ── 문의/요청 탭 ──────────────────────────────────────────────
-    function InquiryTab({ user }) {
-      const [items, setItems] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [showForm, setShowForm] = React.useState(false);
-      const [editItem, setEditItem] = React.useState(null);
-      const [selected, setSelected] = React.useState(null);
+    /* ══════════════════════════════════════════════════════════════
+       문의/요청 탭
+    ══════════════════════════════════════════════════════════════ */
+    function InquiryTab({ user, onUnread }) {
+      const [items, setItems]         = React.useState([]);
+      const [loading, setLoading]     = React.useState(true);
+      const [err, setErr]             = React.useState('');
+      const [showForm, setShowForm]   = React.useState(false);
+      const [editItem, setEditItem]   = React.useState(null);
+      const [selected, setSelected]   = React.useState(null);
       const [confirmDel, setConfirmDel] = React.useState(null);
-      const [answer, setAnswer] = React.useState('');
-      const [saving, setSaving] = React.useState(false);
+      const [answer, setAnswer]       = React.useState('');
+      const [saving, setSaving]       = React.useState(false);
       const [uploading, setUploading] = React.useState(false);
       const [formFiles, setFormFiles] = React.useState([]);
-      const [form, setForm] = React.useState({ title: '', content: '' });
+      const [form, setForm]           = React.useState({ title:'', content:'' });
+      const [search, setSearch]       = React.useState('');
 
-      async function fetch() {
-        setLoading(true);
-        const { data } = await sb.from('inquiries').select('*').order('date', { ascending: false });
-        setItems(data || []); setLoading(false);
+      const lsKey = `church_last_seen_inquiry_${user.id}`;
+      const lastSeen = React.useRef(localStorage.getItem(lsKey) || '1970-01-01T00:00:00.000Z');
+
+      async function loadData() {
+        setLoading(true); setErr('');
+        const { data, error } = await sb.from('inquiries').select('*').order('date', { ascending:false });
+        if (error) { setErr('데이터 로드 오류: ' + error.message); setLoading(false); return; }
+        setItems(data || []);
+        setLoading(false);
       }
-      React.useEffect(() => { fetch(); }, []);
 
-      const visible = (items || []).filter(i => user.id === 'pastor' || i.author_id === user.id);
+      React.useEffect(() => {
+        loadData();
+        const ch = sb.channel('inquiries-ch')
+          .on('postgres_changes', { event:'*', schema:'public', table:'inquiries' }, () => loadData())
+          .subscribe();
+        const poll = setInterval(loadData, 30000);
+        const timer = setTimeout(() => {
+          const now = new Date().toISOString();
+          localStorage.setItem(lsKey, now);
+          lastSeen.current = now;
+          onUnread && onUnread(0);
+        }, 2000);
+        return () => { ch.unsubscribe(); clearInterval(poll); clearTimeout(timer); };
+      }, []);
 
-      function openNew() { setEditItem(null); setForm({ title: '', content: '' }); setFormFiles([]); setShowForm(true); }
-      function openEdit(i) { setEditItem(i); setForm({ title: i.title, content: i.content }); setFormFiles(i.files || []); setShowForm(true); setSelected(null); }
+      React.useEffect(() => {
+        if (selected) {
+          const updated = items.find(i => i.id===selected.id);
+          setSelected(updated || null);
+        }
+      }, [items]);
+
+      React.useEffect(() => {
+        const visible = items.filter(i => user.id==='pastor' ? true : i.author_id===user.id);
+        // 담임목사: 새 문의; 장로: 새 답변
+        const cnt = user.id==='pastor'
+          ? visible.filter(i => i.author_id!==user.id && i.date > lastSeen.current).length
+          : visible.filter(i => i.status==='답변완료' && i.answer_date > lastSeen.current).length;
+        onUnread && onUnread(cnt);
+      }, [items]);
+
+      function isNew(item) {
+        if (user.id==='pastor') return item.author_id!==user.id && item.date > lastSeen.current;
+        return item.status==='답변완료' && (item.answer_date||'') > lastSeen.current;
+      }
+
+      const visible = items.filter(i => user.id==='pastor' || i.author_id===user.id);
+      const searched = visible.filter(i => !search ||
+        i.title.includes(search) || (i.content||'').includes(search) || i.author_name.includes(search));
+
+      function openNew() { setEditItem(null); setForm({ title:'', content:'' }); setFormFiles([]); setShowForm(true); }
+      function openEdit(i) { setEditItem(i); setForm({ title:i.title, content:i.content }); setFormFiles(i.files||[]); setShowForm(true); setSelected(null); }
 
       async function submit() {
-        if (!form.title.trim()) return;
+        if (!form.title.trim()) { alert('제목을 입력하세요.'); return; }
         setSaving(true);
         if (editItem) {
-          await sb.from('inquiries').update({ title: form.title, content: form.content, files: formFiles }).eq('id', editItem.id);
+          const { error } = await sb.from('inquiries').update({ title:form.title, content:form.content, files:formFiles }).eq('id', editItem.id);
+          if (error) { alert('수정 오류: ' + error.message); setSaving(false); return; }
         } else {
-          await sb.from('inquiries').insert({
-            id: genId(), author_id: user.id, author_name: user.name, author_group: user.group,
-            title: form.title, content: form.content, date: new Date().toISOString(), status: '대기중', answer: '', answer_date: '', files: formFiles
+          const { error } = await sb.from('inquiries').insert({
+            id:genId(), author_id:user.id, author_name:user.name, author_group:user.group,
+            title:form.title, content:form.content, date:new Date().toISOString(),
+            status:'대기중', answer:'', answer_date:'', files:formFiles
           });
-          // 알림 발송
-          sendPushNotification(
-            `💬 담임목사님께 새 문의`,
-            `${user.name} (${user.group}그룹): ${form.title}`
-          );
+          if (error) { alert('등록 오류: ' + error.message); setSaving(false); return; }
+          sendPushNotification(`💬 담임목사님께 새 문의`, `${user.name} (${user.group}그룹): ${form.title}`);
         }
-        setFormFiles([]); setShowForm(false); setSaving(false); fetch();
+        setFormFiles([]); setShowForm(false); setSaving(false); loadData();
       }
-      async function doDelete(id) { await sb.from('inquiries').delete().eq('id', id); setConfirmDel(null); setSelected(null); fetch(); }
+
+      async function doDelete(id) {
+        const { error } = await sb.from('inquiries').delete().eq('id', id);
+        if (error) { alert('삭제 오류: ' + error.message); return; }
+        setConfirmDel(null); setSelected(null); loadData();
+      }
+
       async function submitAnswer() {
         if (!answer.trim() || !selected) return;
         setSaving(true);
-        await sb.from('inquiries').update({ answer, answer_date: new Date().toISOString(), status: '답변완료' }).eq('id', selected.id);
-        setSaving(false); setAnswer('');
-        const { data } = await sb.from('inquiries').select('*').order('date', { ascending: false });
-        setItems(data || []); setSelected((data || []).find(i => i.id === selected.id));
+        const { error } = await sb.from('inquiries').update({
+          answer, answer_date:new Date().toISOString(), status:'답변완료'
+        }).eq('id', selected.id);
+        if (error) { alert('답변 오류: ' + error.message); setSaving(false); return; }
+        // 문의자에게 답변 알림 발송
+        sendPushNotification(`💬 담임목사 답변 도착`, `"${selected.title}"에 답변이 등록되었습니다.`);
+        setSaving(false); setAnswer(''); loadData();
       }
 
+      function handleAnswerKey(e) { if (e.key==='Enter' && (e.ctrlKey||e.metaKey)) submitAnswer(); }
+
       return <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>문의 / 요청 ({visible.length})</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={fetch} outline color='#6b7280' small>새로고침</Btn>
-            {user.id !== 'pastor' && <Btn onClick={openNew} color='#6b1a4a'>+ 문의하기</Btn>}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontSize:15, fontWeight:700, color:'#1a1a2e' }}>문의 / 요청 ({visible.length})</span>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn onClick={loadData} outline color='#6b7280' small>새로고침</Btn>
+            {user.id!=='pastor' && <Btn onClick={openNew} color='#6b1a4a'>+ 문의하기</Btn>}
           </div>
         </div>
-        {loading ? <Spinner /> : visible.length === 0
-          ? <div style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>등록된 문의가 없습니다.</div>
-          : visible.map(i => <Card key={i.id} style={{ marginBottom: 10 }}>
-            <div onClick={() => { setSelected(i); setAnswer(''); }} style={{ cursor: 'pointer' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: '#1a1a2e', flex: 1, marginRight: 8 }}>{i.title}</span>
-                <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
-                  {(i.files || []).length > 0 && <Badge text={`📎${i.files.length}`} color='#6b7280' />}
+        <SearchBar value={search} onChange={setSearch} />
+        <ErrBox msg={err} />
+        {loading ? <Spinner /> : searched.length===0
+          ? <div style={{ textAlign:'center', color:'#9ca3af', padding:40 }}>
+              {search ? '검색 결과가 없습니다.' : '등록된 문의가 없습니다.'}
+            </div>
+          : searched.map(i => <Card key={i.id} style={{ marginBottom:10 }}>
+            <div onClick={() => { setSelected(i); setAnswer(''); }} style={{ cursor:'pointer' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, flex:1, marginRight:8 }}>
+                  {isNew(i) && <span className="new-dot" title={user.id==='pastor'?'새 문의':'답변 도착'} />}
+                  <span style={{ fontSize:14, fontWeight:700, color:'#1a1a2e' }}>{i.title}</span>
+                </div>
+                <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                  {(i.files||[]).length>0 && <Badge text={`📎${i.files.length}`} color='#6b7280' />}
                   <Badge text={i.status} color={STATUS_COLORS[i.status]} />
                 </div>
               </div>
-              <div style={{ fontSize: 13, color: '#4b5563', marginBottom: 6 }}>{(i.content || '').slice(0, 70)}{(i.content || '').length > 70 ? '…' : ''}</div>
-              <div style={{ fontSize: 11, color: '#9ca3af' }}>{i.author_name} ({i.author_group}그룹) · {fmtDate(i.date)}</div>
+              <div style={{ fontSize:13, color:'#4b5563', marginBottom:6 }}>{(i.content||'').slice(0,70)}{(i.content||'').length>70?'…':''}</div>
+              <div style={{ fontSize:11, color:'#9ca3af' }}>{i.author_name} ({i.author_group}그룹) · {fmtDate(i.date)}</div>
             </div>
-            <ActionBtns canEdit={i.author_id === user.id && i.status === '대기중'} canDelete={user.id === 'pastor'}
+            <ActionBtns canEdit={i.author_id===user.id && i.status==='대기중'} canDelete={user.id==='pastor'}
               onEdit={() => openEdit(i)} onDelete={() => setConfirmDel(i.id)} />
           </Card>)}
 
-        {showForm && <Modal title={editItem ? '문의 수정' : '담임목사님께 문의 / 요청'} onClose={() => setShowForm(false)}>
-          <Inp label="제목" value={form.title} onChange={v => setForm({ ...form, title: v })} placeholder="문의 또는 요청 제목" />
-          <Txt label="내용" value={form.content} onChange={v => setForm({ ...form, content: v })} rows={5} placeholder="궁금한 점, 의향을 묻고 싶은 내용 등" />
+        {showForm && <Modal title={editItem?'문의 수정':'담임목사님께 문의 / 요청'} onClose={() => setShowForm(false)}>
+          <Inp label="제목" value={form.title} onChange={v => setForm({...form,title:v})} placeholder="문의 또는 요청 제목" />
+          <Txt label="내용" value={form.content} onChange={v => setForm({...form,content:v})} rows={5} placeholder="궁금한 점, 의향을 묻고 싶은 내용 등" />
           <FileUploader files={formFiles} onChange={setFormFiles} uploading={uploading} setUploading={setUploading} folder="inquiries" />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
             <Btn outline color='#6b7280' onClick={() => setShowForm(false)}>취소</Btn>
-            <Btn color='#6b1a4a' onClick={submit} disabled={saving || uploading}>{saving ? '저장중…' : (editItem ? '수정 완료' : '전송')}</Btn>
+            <Btn color='#6b1a4a' onClick={submit} disabled={saving||uploading}>{saving?'저장중…':editItem?'수정 완료':'전송'}</Btn>
           </div>
         </Modal>}
 
         {selected && <Modal title={selected.title} onClose={() => setSelected(null)}>
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom:10 }}>
             <Badge text={selected.status} color={STATUS_COLORS[selected.status]} />
-            <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8 }}>{selected.author_name} ({selected.author_group}그룹) · {fmtDate(selected.date)}</span>
+            <span style={{ fontSize:12, color:'#9ca3af', marginLeft:8 }}>{selected.author_name} ({selected.author_group}그룹) · {fmtDate(selected.date)}</span>
           </div>
-          <div style={{ fontSize: 14, lineHeight: 1.8, color: '#1a1a2e', background: '#f9fafb', padding: 12, borderRadius: 8, marginBottom: 12, whiteSpace: 'pre-wrap' }}>{selected.content}</div>
+          <div style={{ fontSize:14, lineHeight:1.8, color:'#1a1a2e', background:'#f9fafb', padding:12, borderRadius:8, marginBottom:12, whiteSpace:'pre-wrap' }}>{selected.content}</div>
           <FileList files={selected.files} />
-          <ActionBtns canEdit={selected.author_id === user.id && selected.status === '대기중'} canDelete={user.id === 'pastor'}
+          <ActionBtns canEdit={selected.author_id===user.id && selected.status==='대기중'} canDelete={user.id==='pastor'}
             onEdit={() => openEdit(selected)} onDelete={() => setConfirmDel(selected.id)} />
-          {selected.answer && <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: 12, margin: '12px 0' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#854d0e', marginBottom: 6 }}>담임목사 답변 · {fmtDate(selected.answer_date)}</div>
-            <div style={{ fontSize: 14, color: '#1a1a2e', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{selected.answer}</div>
+          {selected.answer && <div style={{ background:'#fefce8', border:'1px solid #fde68a', borderRadius:8, padding:12, margin:'12px 0' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#854d0e', marginBottom:6 }}>담임목사 답변 · {fmtDate(selected.answer_date)}</div>
+            <div style={{ fontSize:14, color:'#1a1a2e', lineHeight:1.8, whiteSpace:'pre-wrap' }}>{selected.answer}</div>
           </div>}
-          {user.id === 'pastor' && selected.status === '대기중' && <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 6 }}>답변 작성</div>
-            <textarea value={answer} onChange={e => setAnswer(e.target.value)} rows={4} placeholder="답변을 입력하세요..."
-              style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 7, fontSize: 13, resize: 'vertical', outline: 'none' }} />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <Btn color='#8B6914' onClick={submitAnswer} disabled={saving}>{saving ? '등록중…' : '답변 등록'}</Btn>
+          {/* 담임목사는 언제든 답변 작성·수정 가능 */}
+          {user.id==='pastor' && <div style={{ marginTop:12 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:6 }}>
+              {selected.answer ? '✏️ 답변 수정' : '답변 작성'}
+            </div>
+            <textarea value={answer||selected.answer||''} onChange={e => setAnswer(e.target.value)}
+              onKeyDown={handleAnswerKey} rows={4} placeholder="답변을 입력하세요... (Ctrl+Enter로 등록)"
+              style={{ width:'100%', padding:'8px 12px', border:'1px solid #d1d5db', borderRadius:7, fontSize:13, resize:'vertical', outline:'none' }} />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
+              <span style={{ fontSize:11, color:'#9ca3af' }}>Ctrl+Enter로 빠르게 등록 · Esc로 닫기</span>
+              <Btn color='#8B6914' onClick={submitAnswer} disabled={saving}>{saving?'등록중…':'답변 등록'}</Btn>
             </div>
           </div>}
         </Modal>}
@@ -657,62 +978,141 @@
       </div>;
     }
 
-    // ── 로그인 / 메인 ─────────────────────────────────────────────
-    function UserBtn({ u, onSelect }) {
-      const [h, setH] = React.useState(false);
-      return <button onClick={onSelect} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
-        style={{
-          width: '100%', padding: '13px 16px', marginBottom: 10, border: `2px solid ${h ? u.color : u.color + '30'}`,
-          borderRadius: 10, background: h ? u.color + '15' : u.color + '08', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s'
-        }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>{u.name}</div>
-        <div style={{ fontSize: 12, color: u.color, marginTop: 2 }}>{u.id === 'pastor' ? '담임목사' : u.group + '그룹 장로'}</div>
-      </button>;
+    /* ══════════════════════════════════════════════════════════════
+       로그인 화면 (PIN 인증 추가)
+    ══════════════════════════════════════════════════════════════ */
+    function LoginScreen({ onLogin }) {
+      const [sel, setSel]   = React.useState(null);
+      const [pin, setPin]   = React.useState('');
+      const [err, setErr]   = React.useState('');
+      const pinRef          = React.useRef();
+
+      function select(u) { setSel(u); setPin(''); setErr(''); setTimeout(() => pinRef.current?.focus(), 100); }
+
+      function tryLogin() {
+        if (!sel) return;
+        if (pin === sel.pin) {
+          lsSet('church_current_user', sel.id);
+          onLogin(sel);
+        } else {
+          setErr('PIN이 올바르지 않습니다. 다시 입력하세요.');
+          setPin('');
+          setTimeout(() => pinRef.current?.focus(), 100);
+        }
+      }
+
+      function handleKey(e) { if (e.key==='Enter') tryLogin(); if (e.key==='Escape') { setSel(null); setPin(''); setErr(''); } }
+
+      return <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+        <div style={{ background:'rgba(255,255,255,0.97)', borderRadius:16, padding:36, width:'100%', maxWidth:360, boxShadow:'0 25px 60px rgba(0,0,0,0.4)', textAlign:'center' }}>
+          <div style={{ fontSize:12, letterSpacing:3, color:'#8B6914', fontWeight:700, marginBottom:6 }}>흥덕남서울비전교회</div>
+          <div style={{ fontSize:22, fontWeight:700, color:'#1a1a2e', marginBottom:4 }}>사역 소통 시스템</div>
+          <div style={{ fontSize:13, color:'#9ca3af', marginBottom:28 }}>담임목사 · 그룹장 전용</div>
+
+          {!sel ? <>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:12, textAlign:'left' }}>본인 이름을 선택하세요</div>
+            {USERS.map(u => {
+              const [h, setH] = React.useState(false);
+              return <button key={u.id} onClick={() => select(u)} onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)}
+                style={{ width:'100%', padding:'13px 16px', marginBottom:10, border:`2px solid ${h?u.color:u.color+'30'}`,
+                  borderRadius:10, background:h?u.color+'15':u.color+'08', cursor:'pointer', textAlign:'left', transition:'all 0.15s' }}>
+                <div style={{ fontSize:15, fontWeight:700, color:'#1a1a2e' }}>{u.name}</div>
+                <div style={{ fontSize:12, color:u.color, marginTop:2 }}>{u.id==='pastor'?'담임목사':u.group+'그룹 장로'}</div>
+              </button>;
+            })}
+          </> : <div>
+            <div style={{ fontSize:15, fontWeight:700, color:'#1a1a2e', marginBottom:4 }}>{sel.name}</div>
+            <div style={{ fontSize:13, color:sel.color, marginBottom:20 }}>{sel.id==='pastor'?'담임목사':sel.group+'그룹 장로'}</div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:8, textAlign:'left' }}>PIN 번호 4자리를 입력하세요</div>
+            <input ref={pinRef} type="password" inputMode="numeric" maxLength={4} value={pin}
+              onChange={e => { setPin(e.target.value.replace(/\D/g,'')); setErr(''); }}
+              onKeyDown={handleKey}
+              placeholder="• • • •"
+              style={{ width:'100%', padding:'12px', border:`2px solid ${err?'#dc2626':'#d1d5db'}`, borderRadius:8, fontSize:22,
+                textAlign:'center', outline:'none', letterSpacing:8, marginBottom:8 }} />
+            {err && <div style={{ fontSize:12, color:'#dc2626', marginBottom:10 }}>{err}</div>}
+            <div style={{ display:'flex', gap:8, marginTop:8 }}>
+              <Btn outline color='#6b7280' onClick={() => { setSel(null); setPin(''); setErr(''); }}>뒤로</Btn>
+              <div style={{ flex:1 }}><Btn color={sel.color} onClick={tryLogin} disabled={pin.length!==4}>로그인</Btn></div>
+            </div>
+            <div style={{ fontSize:11, color:'#9ca3af', marginTop:12 }}>기본 PIN: 담임목사 0000 / 장로 그룹순 1111·2222·3333</div>
+          </div>}
+        </div>
+      </div>;
     }
 
+    /* ══════════════════════════════════════════════════════════════
+       앱 메인
+    ══════════════════════════════════════════════════════════════ */
     function App() {
-      const [user, setUser] = React.useState(null);
-      const [tab, setTab] = React.useState('notice');
-      if (!user) return (
-        <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div style={{ background: 'rgba(255,255,255,0.97)', borderRadius: 16, padding: 36, width: '100%', maxWidth: 360, boxShadow: '0 25px 60px rgba(0,0,0,0.4)', textAlign: 'center' }}>
-            <div style={{ fontSize: 12, letterSpacing: 3, color: '#8B6914', fontWeight: 700, marginBottom: 6 }}>흥덕남서울비전교회</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#1a1a2e', marginBottom: 4 }}>사역 소통 시스템</div>
-            <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 28 }}>담임목사 · 그룹장 전용</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 12, textAlign: 'left' }}>본인 이름을 선택하세요</div>
-            {USERS.map(u => <UserBtn key={u.id} u={u} onSelect={() => { setUser(u); setTab('notice'); }} />)}
-          </div>
-        </div>
-      );
-      const TABS = [{ id: 'notice', label: '📢 공지/현안' }, { id: 'task', label: '📋 그룹업무' }, { id: 'inquiry', label: '💬 문의/요청' }];
-      const uColor = USERS.find(u2 => u2.id === user.id)?.color || '#1a1a2e';
-      return <div style={{ minHeight: '100vh', background: '#f3f4f6' }}>
-        <div style={{ background: '#1a1a2e', padding: '11px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      const [user, setUser] = React.useState(() => {
+        const id = lsGet('church_current_user');
+        return id ? USERS.find(u => u.id===id) || null : null;
+      });
+      const [tab, setTab]     = React.useState('notice');
+      const [unread, setUnread] = React.useState({ notice:0, task:0, inquiry:0 });
+
+      function mkUnread(t) { return cnt => setUnread(prev => ({ ...prev, [t]:cnt })); }
+
+      function switchTab(newTab) {
+        // 현재 탭 읽음 처리
+        if (user) {
+          const now = new Date().toISOString();
+          localStorage.setItem(`church_last_seen_${tab}_${user.id}`, now);
+        }
+        setTab(newTab);
+        setUnread(prev => ({ ...prev, [newTab]:0 }));
+      }
+
+      function handleLogout() {
+        localStorage.removeItem('church_current_user');
+        setUser(null);
+        setUnread({ notice:0, task:0, inquiry:0 });
+      }
+
+      if (!user) return <LoginScreen onLogin={u => { setUser(u); setTab('notice'); }} />;
+
+      const uColor = USERS.find(u2 => u2.id===user.id)?.color || '#1a1a2e';
+      const TABS = [
+        { id:'notice',  label:'📢 공지/현안', key:'notice' },
+        { id:'task',    label:'📋 그룹업무',  key:'task'   },
+        { id:'inquiry', label:'💬 문의/요청', key:'inquiry' },
+      ];
+
+      return <div style={{ minHeight:'100vh', background:'#f3f4f6' }}>
+        {/* 헤더 */}
+        <div style={{ background:'#1a1a2e', padding:'11px 18px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div>
-            <div style={{ fontSize: 10, letterSpacing: 3, color: '#8B6914', fontWeight: 700 }}>흥덕남서울비전교회</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>사역 소통 시스템</div>
+            <div style={{ fontSize:10, letterSpacing:3, color:'#8B6914', fontWeight:700 }}>흥덕남서울비전교회</div>
+            <div style={{ fontSize:16, fontWeight:700, color:'#fff' }}>사역 소통 시스템</div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>{user.name}</div>
-            <button onClick={() => setUser(null)} style={{ fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-              {user.id === 'pastor' ? '담임목사' : user.group + '그룹 장로'} · 나가기
+          <div style={{ textAlign:'right' }}>
+            <div style={{ fontSize:14, fontWeight:700, color:'#fff' }}>{user.name}</div>
+            <button onClick={handleLogout} style={{ fontSize:11, color:'#9ca3af', background:'none', border:'none', cursor:'pointer', padding:0 }}>
+              {user.id==='pastor'?'담임목사':user.group+'그룹 장로'} · 로그아웃
             </button>
           </div>
         </div>
-        <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', display: 'flex' }}>
-          {TABS.map(t => <button key={t.id} onClick={() => setTab(t.id)}
-            style={{
-              flex: 1, padding: '12px 6px', border: 'none', borderBottom: tab === t.id ? `3px solid ${uColor}` : '3px solid transparent',
-              background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
-              color: tab === t.id ? uColor : '#6b7280', transition: 'all 0.15s'
-            }}>
+
+        {/* 탭 바 */}
+        <div style={{ background:'#fff', borderBottom:'1px solid #e5e7eb', display:'flex' }}>
+          {TABS.map(t => <button key={t.id} onClick={() => switchTab(t.id)}
+            style={{ flex:1, padding:'12px 6px', border:'none',
+              borderBottom: tab===t.id ? `3px solid ${uColor}` : '3px solid transparent',
+              background:'none', cursor:'pointer', fontSize:13,
+              fontWeight: tab===t.id ? 700 : 500,
+              color: tab===t.id ? uColor : '#6b7280', transition:'all 0.15s',
+              position:'relative' }}>
             {t.label}
+            {unread[t.key] > 0 && <span className="badge" style={{ position:'absolute', top:6, right:6, fontSize:10 }}>{unread[t.key]}</span>}
           </button>)}
         </div>
-        <div style={{ padding: 16, maxWidth: 680, margin: '0 auto' }}>
-          {tab === 'notice' && <NoticeTab user={user} />}
-          {tab === 'task' && <TaskTab user={user} />}
-          {tab === 'inquiry' && <InquiryTab user={user} />}
+
+        {/* 컨텐츠 */}
+        <div style={{ padding:16, maxWidth:680, margin:'0 auto' }}>
+          {tab==='notice'  && <NoticeTab  user={user} onUnread={mkUnread('notice')}  />}
+          {tab==='task'    && <TaskTab    user={user} onUnread={mkUnread('task')}    />}
+          {tab==='inquiry' && <InquiryTab user={user} onUnread={mkUnread('inquiry')} />}
         </div>
       </div>;
     }
